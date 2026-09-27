@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Events</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 32px;
+        font: 15px/1.5 system-ui, sans-serif;
+        color: #12212e;
+      }
+      h1 {
+        margin: 0 0 20px;
+        font-size: 20px;
+      }
+      form {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 24px;
+      }
+      input {
+        flex: 1;
+        max-width: 420px;
+        padding: 10px 12px;
+        border: 1px solid #ccd5dd;
+        border-radius: 4px;
+        font: inherit;
+      }
+      button {
+        padding: 10px 18px;
+        border: 0;
+        border-radius: 4px;
+        background: #2f7fb5;
+        color: #fff;
+        font: inherit;
+        cursor: pointer;
+      }
+      button[disabled] {
+        opacity: 0.5;
+      }
+      ul {
+        margin: 0 0 28px;
+        padding: 0;
+        list-style: none;
+      }
+      li {
+        display: flex;
+        gap: 12px;
+        padding: 8px 0;
+        border-bottom: 1px solid #eef1f4;
+      }
+      li code {
+        color: #2f7fb5;
+      }
+      .muted {
+        color: #5d7286;
+      }
+      h2 {
+        margin: 0 0 8px;
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: #5d7286;
+      }
+      pre {
+        margin: 0;
+        padding: 16px;
+        border-radius: 6px;
+        background: #0b1c2c;
+        color: #d8e6f2;
+        font-size: 12.5px;
+        overflow-x: auto;
+      }
+      .error {
+        color: #b4443a;
+      }
+      .url {
+        margin: 0 0 8px;
+        font-size: 12.5px;
+        color: #5d7286;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Events</h1>
+
+    <form id="form">
+      <input id="input" placeholder="Type anything and press Add" autocomplete="off" />
+      <button id="add" type="submit">Add</button>
+    </form>
+
+    <ul id="list"></ul>
+
+    <h2>API response</h2>
+    <p class="url"><code id="url"></code></p>
+    <pre id="out">loading…</pre>
+
+    <script type="module">
+      const CLERK_JS = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@6.32.1/dist/clerk.browser.js';
+      const CLERK_UI = 'https://cdn.jsdelivr.net/npm/@clerk/ui@1.34.0/dist/ui.browser.js';
+
+      const list = document.querySelector('#list');
+      const url = document.querySelector('#url');
+      const out = document.querySelector('#out');
+      const form = document.querySelector('#form');
+      const input = document.querySelector('#input');
+      const add = document.querySelector('#add');
+
+      const loadScript = (src, data = {}) =>
+        new Promise((resolve, reject) => {
+          const s = document.createElement('script');
+          s.src = src;
+          s.crossOrigin = 'anonymous';
+          Object.assign(s.dataset, data);
+          s.addEventListener('load', resolve);
+          s.addEventListener('error', () => reject(new Error(`Could not load ${src}`)));
+          document.head.appendChild(s);
+        });
+
+      /** clerk-js v6.32+ keeps the UI in a separate bundle; load() needs it. */
+      const loadClerk = (key) =>
+        Promise.all([loadScript(CLERK_UI), loadScript(CLERK_JS, { clerkPublishableKey: key })]);
+
+      let clerk;
+
+      const api = async (path, init = {}) => {
+        // Show the exact URL and verb each call goes to.
+        url.textContent = `${init.method ?? 'GET'} ${new URL(`/api/events${path}`, location.origin)}`;
+        const token = await clerk.session.getToken();
+        const res = await fetch(`/api/events${path}`, {
+          ...init,
+          headers: {
+            ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        const body = res.status === 204 ? null : await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          throw new Error(body?.message ?? `HTTP ${res.status}`);
+        }
+
+        return body;
+      };
+
+      const render = (payload) => {
+        // Exactly what the API returned, nothing reshaped.
+        out.textContent = JSON.stringify(payload, null, 2);
+        out.classList.remove('error');
+
+        list.replaceChildren(
+          ...payload.events.map((event) => {
+            const li = document.createElement('li');
+            const id = document.createElement('code');
+            id.textContent = event.id;
+            const name = document.createElement('span');
+            name.textContent = event.name;
+            const date = document.createElement('span');
+            date.className = 'muted';
+            date.textContent = event.date || 'no date';
+            li.append(id, name, date);
+            return li;
+          }),
+        );
+      };
+
+      const refresh = async () => render(await api(''));
+
+      const fail = (message) => {
+        out.textContent = message;
+        out.classList.add('error');
+      };
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        add.disabled = true;
+
+        try {
+          // One box, so it goes in as the name. Type and date are left to the API.
+          out.textContent = JSON.stringify(await api('', {
+            method: 'POST',
+            body: JSON.stringify({ name: input.value }),
+          }), null, 2);
+          input.value = '';
+          await refresh();
+        } catch (error) {
+          fail(error.message);
+        } finally {
+          add.disabled = false;
+          input.focus();
+        }
+      });
+
+      try {
+        const { publishableKey, configured } = await fetch('/api/auth/config').then((r) => r.json());
+
+        if (!configured) {
+          fail('No Clerk keys on the server — add them to .env and restart.');
+        } else {
+          await loadClerk(publishableKey);
+          clerk = window.Clerk;
+          await clerk.load({ clerkUICtor: window.__internal_ClerkUICtor });
+
+          if (!clerk.user) {
+            window.location.replace('/login');
+          } else {
+            await refresh();
+            input.focus();
+          }
+        }
+      } catch (error) {
+        fail(error.message);
+      }
+    </script>
+  </body>
+</html>

@@ -27,3 +27,8 @@
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
+
+# PM2 logs
+/logs
+# chat training logs
+/data/
